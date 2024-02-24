@@ -157,20 +157,62 @@ void uart_identify(void)
     return;
 }
 
-bool uart_write_ready(void)
+// midlevel stuff
+#define USB_FIFO 0
+
+static inline void uart_write_nocheck(char b)
 {
+#if USB_FIFO
+    uart_outb(USB_FIFO_ADDR+USB_FIFO_IO, b);
+#else
+    uart_outb(UART_ADDRESS+UART_THR, b);
+#endif
+}
+
+static inline bool uart_write_ready(void)
+{
+#if USB_FIFO
+    return uart_inb(USB_FIFO_ADDR+USB_FIFO_STATUS) & 0x01 ? false : true;
+#else
     return uart_inb(UART_ADDRESS+UART_LSR) & UART_LSR_THRE ? true : false;
+#endif
 }
 
 void uart_flush(void)
 {
-    while((uart_inb(UART_ADDRESS+UART_LSR) & (UART_LSR_THRE|UART_LSR_TEMT)) != (UART_LSR_THRE|UART_LSR_TEMT));
+#if USB_FIFO
+    uart_outb(USB_FIFO_ADDR+USB_FIFO_FLUSH, 0);
+    while (uart_inb(USB_FIFO_ADDR+USB_FIFO_STATUS) & 0x81);
+#else
+    while ((uart_inb(UART_ADDRESS+UART_LSR) & (UART_LSR_THRE|UART_LSR_TEMT)) != (UART_LSR_THRE|UART_LSR_TEMT));
+#endif
 }
+
+static inline uint8_t uart_read_byte_nocheck(void)
+{
+#if USB_FIFO
+    return uart_inb(USB_FIFO_ADDR+USB_FIFO_IO);
+#else
+    return uart_inb(UART_ADDRESS+UART_RBR);
+#endif
+}
+
+static inline bool uart_read_ready(void)
+{
+#if USB_FIFO
+    return uart_inb(USB_FIFO_ADDR+USB_FIFO_STATUS) & 0x80 ? false : true;
+#else
+    return uart_inb(UART_ADDRESS+UART_LSR) & UART_LSR_DR ? true : false;
+#endif
+}
+
+// highlevel stuff
 
 void uart_write_byte(char b)
 {
-    while(!(uart_inb(UART_ADDRESS+UART_LSR) & UART_LSR_THRE));
-    uart_outb(UART_ADDRESS+UART_THR, b);
+    while(!uart_write_ready());
+
+    uart_write_nocheck(b);
 }
 
 int uart_write_string(const char *str)
@@ -187,34 +229,44 @@ int uart_write_string(const char *str)
     return r;
 }
 
-bool uart_read_ready(void)
+int inline uart_read_byte(void)
 {
-    return uart_inb(UART_ADDRESS+UART_LSR) & UART_LSR_DR ? true : false;
-}
-
-int uart_read_byte(void)
-{
-    if(uart_inb(UART_ADDRESS+UART_LSR) & UART_LSR_DR)
-        return uart_inb(UART_ADDRESS+UART_RBR);
+    if(uart_read_ready())
+        return uart_read_byte_nocheck();
     else
         return -1;
 }
 
-uint8_t uart_read_byte_wait(void)
+uint8_t inline uart_read_byte_wait(void)
 {
-    while(!(uart_inb(UART_ADDRESS+UART_LSR) & UART_LSR_DR));
-    return uart_inb(UART_ADDRESS+UART_RBR);
+    while(!uart_read_ready());
+    return uart_read_byte_nocheck();
 }
 
 void uart_read_string(void *buffer, int count)
 {
-    char *p = buffer;
-    char *end = p + count;
-
-    while(p < end){
-        while(!(uart_inb(UART_ADDRESS+UART_LSR) & UART_LSR_DR));
-        *(p++) = uart_inb(UART_ADDRESS+UART_RBR);
-    }
+#if USB_FIFO
+    asm volatile (
+            "  bra.s .LDone\n"
+            ".Louter:\n"
+            "  swap %[Count]\n"
+            ".Linner:\n"
+            "  tst.b (%[Status])\n"
+            "  jmi .Linner\n"
+            "  move.b (%[Data]), (%[Buffer])+\n"
+            ".LDone:\n"
+            "  dbra %[Count], .Linner\n"
+            "  swap %[Count]\n"
+            "  dbra %[Count], .Louter\n"
+            : [Buffer] "+aQ" ((uint8_t *)buffer)
+            : [Data] "a" (KISS68030_IO_BASE+USB_FIFO_ADDR+USB_FIFO_IO),
+              [Status] "a" (KISS68030_IO_BASE+USB_FIFO_ADDR+USB_FIFO_STATUS),
+              [Count] "d" (count)
+            : "cc", "memory");
+#else
+    while (count--)
+        *(uint8_t*)buffer++ = uart_read_byte_wait();
+#endif
 }
 
 bool uart_check_cancel_key(void)

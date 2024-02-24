@@ -28,6 +28,15 @@
 #define ECB_IO_BASE  MINI68K_IO_BASE
 #endif
 
+/* USB-FIFO card */
+#define USB_FIFO_ADDR   0x0C
+
+/* USB-FIFO register */
+#define USB_FIFO_IO     0x00
+#define USB_FIFO_STATUS 0x01
+#define USB_FIFO_FLUSH  0x02
+#define USB_FIFO_JUNK   0x03
+
 /* interrupts */
 #define MFPIC_I8042_IRQ             1       /* Fixed IRQ but requires a jumper on card to enable */
 #define MFPIC_IDE_IRQ               9       /* NOTE! this requires MF/PIC board modification! */
